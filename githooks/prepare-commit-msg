@@ -3,32 +3,37 @@ import sys, subprocess, json, os
 
 msg_file = sys.argv[1]
 
-# 1. Get staged file list and diff
+# 1. Get staged file list
 staged_files = subprocess.check_output(['git', 'diff', '--cached', '--name-only']).decode().strip().split('\n')
 if staged_files == ['']: staged_files = []
-if staged_files:
-    diff_output = subprocess.check_output(['git', 'diff', '--cached']).decode()
-else:
-    diff_output = ''
 
-# 2. Prepare payload for LLM (9router proxy)
+# 2. Get diff (including new files)
+try:
+    diff_output = subprocess.check_output(['git', 'diff', '--cached']).decode()
+except:
+    diff_output = ""
+
+# 3. Enhance context if diff is empty but files are staged (new files)
+if not diff_output.strip() and staged_files:
+    diff_output = f"Staged files: {', '.join(staged_files)}\nPlease describe the addition of these files."
+
+# 4. Prepare payload for LLM (9router proxy)
 endpoint = os.getenv('LLM_ENDPOINT')
 api_key = os.getenv('LLM_API_KEY')
 if not endpoint:
-    default_msg = "feat: update files"
+    default_msg = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
     with open(msg_file, "w") as f:
         f.write(default_msg)
     sys.exit(0)
 
 payload = {
     "messages": [
-        {"role": "system", "content": "Generate a concise Conventional Commit message (type: description) based on the git diff provided. Use only the standard types: feat, fix, docs, chore, refactor, test. Keep the description under 72 characters."},
+        {"role": "system", "content": "Generate a concise Conventional Commit message (type: description). If files are new, use 'feat: add <filename>'. Use standard types: feat, fix, docs, chore, refactor, test. Description must be under 72 characters."},
         {"role": "user", "content": diff_output or "No diff (empty commit)"}
     ]
 }
 
-# 3. Call the LLM via curl
-import subprocess, shlex
+# 5. Call the LLM via curl
 curl_cmd = ["curl", "-s", "-X", "POST", endpoint,
             "-H", "Content-Type: application/json"]
 if api_key:
@@ -37,7 +42,7 @@ curl_cmd += ["-d", json.dumps(payload)]
 
 result = subprocess.run(curl_cmd, capture_output=True, text=True)
 if result.returncode != 0:
-    commit_msg = "feat: update files"
+    commit_msg = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
 else:
     try:
         resp = json.loads(result.stdout)
@@ -45,10 +50,10 @@ else:
         import re
         pattern = r"^(feat|fix|docs|chore|refactor|test)(?:\(.+\))?: .{1,72}$"
         if not re.match(pattern, commit_msg):
-            commit_msg = "feat: update files"
+            commit_msg = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
     except Exception:
-        commit_msg = "feat: update files"
+        commit_msg = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
 
-# 4. Write the generated message
+# 6. Write the generated message
 with open(msg_file, "w") as f:
     f.write(commit_msg)
