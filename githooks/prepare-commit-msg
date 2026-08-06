@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 import sys
-
 msg_file = sys.argv[1]
-draft = "feat: update project files\n\n"
-
-with open(msg_file, "r+") as f:
-    content = f.read()
-    if not content:
-        f.seek(0, 0)
-        f.write(draft + content)
+with open(msg_file, "w") as f:
+    f.write("feat: update project files")
