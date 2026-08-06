@@ -3,52 +3,49 @@ import sys, subprocess, json, os
 
 msg_file = sys.argv[1]
 
-# 1. Get staged file list
+# 1. Identifikasi status file
 staged_files = subprocess.check_output(['git', 'diff', '--cached', '--name-only']).decode().strip().split('\n')
 if staged_files == ['']: staged_files = []
 
-# 2. Get diff
-try:
-    diff_output = subprocess.check_output(['git', 'diff', '--cached']).decode()
-except Exception:
-    diff_output = ""
+# Cek file baru (untracked) vs modified
+new_files = [f for f in staged_files if subprocess.run(['git', 'ls-files', '--error-unmatch', f], capture_output=True).returncode != 0]
+modified_files = [f for f in staged_files if f not in new_files]
 
-# 3. Build context
-context = f"Staged files: {', '.join(staged_files)}\n\nDiff:\n{diff_output}" if staged_files else diff_output
+# 2. Logika Deterministik untuk Tipe
+if new_files:
+    commit_type = "feat"
+    base_desc = f"add {', '.join(new_files)}"
+elif modified_files:
+    commit_type = "fix" # Default, akan dipercantik LLM
+    base_desc = f"update {', '.join(modified_files)}"
+else:
+    commit_type = "chore"
+    base_desc = "misc changes"
 
-# 4. Load specification
-script_dir = os.path.dirname(__file__)
-context_path = os.path.join(script_dir, 'context.md')
-with open(context_path, 'r') as f:
-    spec_content = f.read()
-
-# 5. Call LLM
+# 3. Minta LLM mempercantik deskripsi (opsional)
 endpoint = os.getenv('LLM_ENDPOINT')
 api_key = os.getenv('LLM_API_KEY')
-fallback = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
+final_msg = f"{commit_type}: {base_desc}"
 
-if not endpoint:
-    with open(msg_file, "w") as f: f.write(fallback)
-    sys.exit(0)
-
-payload = {
-    "messages": [
-        {"role": "system", "content": spec_content + "\n\nINSTRUCTIONS:\n1. If a NEW file is created, you MUST use 'feat: add <filename>'.\n2. For existing files, use appropriate type (feat, fix, docs, etc.) + action.\n3. Output ONLY a single line: '<type>: <description>' (max 72 chars)."},
-        {"role": "user", "content": context or "No diff"}
-    ]
-}
-
-curl_cmd = ["curl", "-s", "-X", "POST", endpoint, "-H", "Content-Type: application/json"]
-if api_key: curl_cmd += ["-H", f"Authorization: Bearer {api_key}"]
-curl_cmd += ["-d", json.dumps(payload)]
-
-result = subprocess.run(curl_cmd, capture_output=True, text=True)
-commit_msg = fallback
-if result.returncode == 0:
-    try:
-        resp = json.loads(result.stdout)
-        commit_msg = resp.get('choices', [{'message': {'content': ''}}])[0]['message']['content'].strip()
-    except: pass
+if endpoint:
+    diff_output = subprocess.check_output(['git', 'diff', '--cached']).decode()
+    payload = {
+        "messages": [
+            {"role": "system", "content": f"You are a commit assistant. The commit type is fixed as '{commit_type}'. Rewrite the following description to be more meaningful based on the provided diff. Output ONLY the description text (no type prefix, max 60 chars)."},
+            {"role": "user", "content": f"Original: {base_desc}\nDiff:\n{diff_output}"}
+        ]
+    }
+    curl_cmd = ["curl", "-s", "-X", "POST", endpoint, "-H", "Content-Type: application/json"]
+    if api_key: curl_cmd += ["-H", f"Authorization: Bearer {api_key}"]
+    curl_cmd += ["-d", json.dumps(payload)]
+    
+    result = subprocess.run(curl_cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        try:
+            resp = json.loads(result.stdout)
+            refined_desc = resp.get('choices',[{'message':{'content':''}}])[0]['message']['content'].strip()
+            final_msg = f"{commit_type}: {refined_desc}"
+        except: pass
 
 with open(msg_file, "w") as f:
-    f.write(commit_msg)
+    f.write(final_msg)
