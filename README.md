@@ -21,7 +21,7 @@ graph TD
 ### Setup (run once per repository)
 ```bash
 # Go to your project directory
-cd ~/Documents/Research/commit-lazy
+cd ~/Documents/xxx/your-directory
 
 # Create the hooks folder if it does not exist
 mkdir -p githooks
