@@ -13,40 +13,33 @@ try:
 except Exception:
     diff_output = ""
 
-# 3. Build context: file names + diff content
+# 3. Build context
 context = f"Staged files: {', '.join(staged_files)}\n\nDiff:\n{diff_output}" if staged_files else diff_output
 
-# 4. Load Conventional Commits specification from context.md
+# 4. Load specification
 script_dir = os.path.dirname(__file__)
 context_path = os.path.join(script_dir, 'context.md')
-if os.path.exists(context_path):
-    with open(context_path, 'r') as f:
-        spec_content = f.read()
-else:
-    spec_content = ""
+with open(context_path, 'r') as f:
+    spec_content = f.read()
 
-# 5. Call LLM (9router proxy)
+# 5. Call LLM
 endpoint = os.getenv('LLM_ENDPOINT')
 api_key = os.getenv('LLM_API_KEY')
-fallback = f"feat: update {', '.join(staged_files) if staged_files else 'files'}"
+fallback = f"feat: add {', '.join(staged_files) if staged_files else 'files'}"
 
 if not endpoint:
-    with open(msg_file, "w") as f:
-        f.write(fallback)
+    with open(msg_file, "w") as f: f.write(fallback)
     sys.exit(0)
 
 payload = {
     "messages": [
-        {"role": "system", "content": spec_content + "\n\nYou generate Conventional Commit messages. Analyze the given diff and choose the most appropriate type from: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Output ONLY a single line in format '<type>: <description>' (max 72 chars, no quotes, no explanation)."},
-        {"role": "user", "content": context or "No diff (empty commit)"}
+        {"role": "system", "content": spec_content + "\n\nINSTRUCTIONS:\n1. If a NEW file is created, you MUST use 'feat: add <filename>'.\n2. For existing files, use appropriate type (feat, fix, docs, etc.) + action.\n3. Output ONLY a single line: '<type>: <description>' (max 72 chars)."},
+        {"role": "user", "content": context or "No diff"}
     ]
 }
 
-# 6. Call the LLM via curl
-curl_cmd = ["curl", "-s", "-X", "POST", endpoint,
-            "-H", "Content-Type: application/json"]
-if api_key:
-    curl_cmd += ["-H", f"Authorization: Bearer {api_key}"]
+curl_cmd = ["curl", "-s", "-X", "POST", endpoint, "-H", "Content-Type: application/json"]
+if api_key: curl_cmd += ["-H", f"Authorization: Bearer {api_key}"]
 curl_cmd += ["-d", json.dumps(payload)]
 
 result = subprocess.run(curl_cmd, capture_output=True, text=True)
@@ -55,13 +48,7 @@ if result.returncode == 0:
     try:
         resp = json.loads(result.stdout)
         commit_msg = resp.get('choices', [{'message': {'content': ''}}])[0]['message']['content'].strip()
-        import re
-        pattern = r"^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\(.+\))?: .{1,72}$"
-        if not re.match(pattern, commit_msg):
-            commit_msg = fallback
-    except Exception:
-        commit_msg = fallback
+    except: pass
 
-# 7. Write the generated message
 with open(msg_file, "w") as f:
     f.write(commit_msg)
